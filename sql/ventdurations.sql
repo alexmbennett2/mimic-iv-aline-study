@@ -1,9 +1,9 @@
 with vc AS
 (
-    select stay_id, charttime
-    , LAG(charttime, 1) OVER (partition by stay_id order by charttime) AS charttime_lag
+    select icustay_id as stay_id, charttime
+    , LAG(charttime, 1) OVER (partition by icustay_id order by charttime) AS charttime_lag
 
-    from `physionet-data.mimic_icu.chartevents`
+    from `physionet-data.mimiciii_clinical.chartevents`
     WHERE itemid = 223849
     AND value != 'Standby'
 )
