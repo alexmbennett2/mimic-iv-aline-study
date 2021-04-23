@@ -19,14 +19,14 @@
 with co as
 (
   select
-    co.subject_id, co.hadm_id, co.stay_id, co.intime, co.outtime
+    co.subject_id, co.hadm_id, co.icustay_id, co.intime, co.outtime
     , DATETIME_SUB(co.vent_starttime, INTERVAL 1 day) as starttime
     , DATETIME_ADD(co.vent_starttime, INTERVAL 2 HOUR) as endtime
   from aline.cohort co
 )
 , stg_fio2 as
 (
-  select co.stay_id, ce.charttime
+  select co.icustay_id, ce.charttime
     -- pre-process the FiO2s to ensure they are between 21-100%
     , max(
         case
@@ -43,20 +43,20 @@ with co as
       else null end
     ) as fio2_chartevents
   from co
-  left join `physionet-data.mimic_icu.chartevents` ce
-    on co.stay_id = ce.stay_id
+  left join `physionet-data.mimiciii_clinical.chartevents` ce
+    on co.icustay_id = ce.icustay_id
     and ce.itemid = 223835 -- Inspired O2 Fraction (FiO2)
-    group by co.stay_id, ce.charttime
+    group by co.icustay_id, ce.charttime
 )
 , bg as
 (
-    select pvt.stay_id, pvt.charttime
+    select pvt.icustay_id, pvt.charttime
   , max(case when label = 'SPECIMEN' then value else null end) as SPECIMEN
   , max(case when label = 'FIO2' then valuenum else null end) as FIO2
   , max(case when label = 'PO2' then valuenum else null end) as PO2
   from
   ( -- begin query that extracts the data
-    select co.stay_id, charttime
+    select co.icustay_id, charttime
         -- here we assign labels to itemids
         -- this also fuses together multiple itemids containing the same data
         , case
@@ -76,29 +76,29 @@ with co as
           end as valuenum
 
       from co
-      left join `physionet-data.mimic_hosp.labevents` le
+      left join `physionet-data.mimiciii_clinical.labevents` le
         on co.subject_id = le.subject_id
         and le.charttime between co.starttime and co.endtime
         and le.itemid in (52028, 50816, 50821)
   ) pvt
-  group by pvt.stay_id, pvt.charttime
+  group by pvt.icustay_id, pvt.charttime
   -- we only want rows with a PO2 measurement
   having max(case when label = 'PO2' then valuenum else null end) is not null
 )
 , stg_pafi as
 (
 select
-  bg.stay_id, bg.charttime
+  bg.icustay_id, bg.charttime
   , bg.PO2, bg.FIO2, s2.fio2_chartevents
   , case when coalesce(bg.fio2, s2.fio2_chartevents, 0) > 0 and coalesce(bg.FIO2, s2.fio2_chartevents, 100) <= 100
         then 100*bg.PO2/(coalesce(bg.fio2, s2.fio2_chartevents))
       else null end as pao2fio2
   , SPECIMEN
-  , ROW_NUMBER() over (partition by bg.stay_id order by bg.charttime DESC, s2.charttime DESC) as rn
+  , ROW_NUMBER() over (partition by bg.icustay_id order by bg.charttime DESC, s2.charttime DESC) as rn
 from bg
 left join stg_fio2 s2
   -- same patient
-  on  bg.stay_id = s2.stay_id
+  on  bg.icustay_id = s2.icustay_id
   -- fio2 occurred at most 4 hours before this blood gas
   and s2.charttime between DATETIME_SUB(bg.charttime, INTERVAL 4 HOUR) and bg.charttime
 where coalesce(bg.SPECIMEN, 'ART.') = 'ART.'
@@ -108,13 +108,13 @@ where coalesce(bg.SPECIMEN, 'ART.') = 'ART.'
 -------------------------------------------
 , labs as (
 select
-  pvt.stay_id
+  pvt.icustay_id
   , max(case when label = 'BILIRUBIN' then valuenum else null end) as BILIRUBIN_max
   , max(case when label = 'CREATININE' then valuenum else null end) as CREATININE_max
   , min(case when label = 'PLATELET' then valuenum else null end) as PLATELET_min
 from
 ( -- begin query that extracts the data
-  select co.stay_id
+  select co.icustay_id
   -- here we assign labels to itemids
   -- this also fuses together multiple itemids containing the same data
   , case
@@ -134,7 +134,7 @@ from
 
   from co
 
-  left join `physionet-data.mimic_hosp.labevents` le
+  left join `physionet-data.mimiciii_clinical.labevents` le
     on co.subject_id = le.subject_id
     and le.charttime between co.starttime and co.endtime
     and le.itemid in
@@ -146,24 +146,24 @@ from
     )
     and valuenum is not null and valuenum > 0 -- lab values cannot be 0 and cannot be negative
 ) pvt
-group by pvt.stay_id
+group by pvt.icustay_id
 )
 -- VITALS --
 , vitals as
 (
   select
-    co.stay_id, min(valuenum) as MeanBP_min
+    co.icustay_id, min(valuenum) as MeanBP_min
   from co
-  inner join `physionet-data.mimic_icu.chartevents` ce
+  inner join `physionet-data.mimiciii_clinical.chartevents` ce
     on ce.subject_id = co.subject_id
     and ce.charttime between co.starttime and co.endtime
     and ce.itemid in (220052,220181,225312)
-  group by co.stay_id
+  group by co.icustay_id
 )
 
 , uo as
 (
-  select co.stay_id
+  select co.icustay_id
   -- volumes associated with urine output itemids
   , sum(case when itemid = 227488 then -1.0*value else value end)/
   (
@@ -177,7 +177,7 @@ group by pvt.stay_id
 
   from co
   -- Join to the outputevents table to get urine output
-  left join `physionet-data.mimic_icu.outputevents` oe
+  left join `physionet-data.mimiciii_clinical.outputevents` oe
     on co.subject_id = oe.subject_id
     -- ensure the data occurs during the first day
     and oe.charttime between co.starttime and co.endtime
@@ -197,7 +197,7 @@ group by pvt.stay_id
     227488, -- GU Irrigant Volume In
     227489  -- GU Irrigant/Urine Volume Out
     )
-  group by co.stay_id
+  group by co.icustay_id
 )
 
 ---------
@@ -206,9 +206,9 @@ group by pvt.stay_id
 
 , gcs_base as
 (
-  select co.stay_id, l.charttime
+  select co.icustay_id, l.charttime
   , ROW_NUMBER ()
-          OVER (PARTITION BY co.stay_id ORDER BY l.charttime ASC) as rn
+          OVER (PARTITION BY co.icustay_id ORDER BY l.charttime ASC) as rn
 
   -- merge the itemids so that the pivot applies to both metavision/carevue data
   , max(case when l.itemid in (223901) then l.valuenum else null end) as GCSMotor
@@ -222,7 +222,7 @@ group by pvt.stay_id
       else 0 end) as EndoTrachFlag
 
   from co
-  inner join `physionet-data.mimic_icu.chartevents` l
+  inner join `physionet-data.mimiciii_clinical.chartevents` l
     on co.subject_id = l.subject_id
     and l.charttime between co.starttime and co.endtime
     and l.itemid in -- Isolate the desired GCS variables
@@ -230,11 +230,11 @@ group by pvt.stay_id
       -- GCS components, Metavision
       223900, 223901, 220739
     )
-  group by co.stay_id, l.charttime
+  group by co.icustay_id, l.charttime
 )
 , gcs as
 (
-  select b.stay_id
+  select b.icustay_id
   -- Calculate GCS, factoring in special case when they are intubated and prev vals
   -- note that the coalesce are used to implement the following if:
   --  if current value exists, use it
@@ -262,16 +262,16 @@ group by pvt.stay_id
   from gcs_base b
   -- join to itself within 6 hours to get previous value
   left join gcs_base b2
-    on b.stay_id = b2.stay_id
+    on b.icustay_id = b2.icustay_id
     and b.rn = b2.rn+1
     and b2.charttime > DATETIME_SUB(b.charttime, INTERVAL 6 HOUR)
-  group by b.stay_id
+  group by b.icustay_id
 )
 
 -- Aggregate the components for the score
 , scorecomp as
 (
-select co.stay_id
+select co.icustay_id
   , v.MeanBP_Min
 
   -- by the cohort definition, patients are never on vasopressors
@@ -290,23 +290,23 @@ select co.stay_id
 
 from co
 left join stg_pafi pf
- on co.stay_id = pf.stay_id
+ on co.icustay_id = pf.icustay_id
  and pf.rn = 1
 left join vitals v
-  on co.stay_id = v.stay_id
+  on co.icustay_id = v.icustay_id
 left join labs l
-  on co.stay_id = l.stay_id
+  on co.icustay_id = l.icustay_id
 left join uo
-  on co.stay_id = uo.stay_id
+  on co.icustay_id = uo.icustay_id
 left join gcs gcs
-  on co.stay_id = gcs.stay_id
+  on co.icustay_id = gcs.icustay_id
 )
 , scorecalc as
 (
   -- Calculate the final score
   -- note that if the underlying data is missing, the component is null
   -- eventually these are treated as 0 (normal), but knowing when data is missing is useful for debugging
-  select stay_id
+  select icustay_id
   -- Respiration
   , case
       -- patient is never ventilated
@@ -372,7 +372,7 @@ left join gcs gcs
     as renal
   from scorecomp
 )
-select co.stay_id
+select co.icustay_id
   -- Combine all the scores to get SOFA
   -- Impute 0 if the score is missing
   , coalesce(respiration,0)
@@ -390,4 +390,4 @@ select co.stay_id
 , renal
 from co
 left join scorecalc s
-  on co.stay_id = s.stay_id
+  on co.icustay_id = s.icustay_id
