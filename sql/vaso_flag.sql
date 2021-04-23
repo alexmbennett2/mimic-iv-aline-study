@@ -12,8 +12,8 @@
 with io_mv as
 (
   select
-    stay_id, linkorderid, starttime, endtime
-  from `physionet-data.mimic_icu.inputevents` io
+    icustay_id, linkorderid, starttime, endtime
+  from `physionet-data.mimiciii_clinical.inputevents_mv` io
   -- Subselect the vasopressor ITEMIDs
   where itemid in
   (
@@ -28,11 +28,11 @@ with io_mv as
   and rate > 0
 )
 select
-  co.subject_id, co.hadm_id, co.stay_id
+  co.subject_id, co.hadm_id, co.icustay_id
   , MAX(CASE
-          WHEN io_mv.stay_id is not null then 1
+          WHEN io_mv.icustay_id is not null then 1
   else 0 end) as vaso_flag
-from `physionet-data.mimic_icu.icustays` co
+from `physionet-data.mimiciii_clinical.icustays` co
 left join io_mv
-  on co.stay_id = io_mv.stay_id
-group by co.subject_id, co.hadm_id, co.stay_id
+  on co.icustay_id = io_mv.icustay_id
+group by co.subject_id, co.hadm_id, co.icustay_id
