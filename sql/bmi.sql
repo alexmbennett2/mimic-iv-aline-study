@@ -7,24 +7,19 @@
 WITH ht AS
 (
   SELECT 
-    c.subject_id, c.stay_id, c.charttime,
+    c.subject_id, c.icustay_id, c.charttime,
     -- Ensure that all heights are in centimeters, and fix data as needed
     CASE
-        -- rule for neonates
-        WHEN pt.anchor_age = 0
-         AND (c.valuenum * 2.54) < 80
-          THEN c.valuenum * 2.54
-        -- rule for adults
-        WHEN pt.anchor_age > 0
-         AND (c.valuenum * 2.54) > 120
+        -- ignoring neonates, no anchor_age available
+        WHEN (c.valuenum * 2.54) > 120
          AND (c.valuenum * 2.54) < 230
           THEN c.valuenum * 2.54
         -- set bad data to NULL
         ELSE NULL
     END AS height
-    , ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY charttime) AS rn
-  FROM `physionet-data.mimic_icu.chartevents` c
-  INNER JOIN `physionet-data.mimic_core.patients` pt
+    , ROW_NUMBER() OVER (PARTITION BY icustay_id ORDER BY charttime) AS rn
+  FROM `physionet-data.mimiciii_clinical.chartevents` c
+  INNER JOIN `physionet-data.mimiciii_clinical.patients` pt
     ON c.subject_id = pt.subject_id
   WHERE c.valuenum IS NOT NULL
   AND c.valuenum != 0
@@ -39,19 +34,19 @@ WITH ht AS
 , wt AS
 (
     SELECT
-        c.stay_id
+        c.icustay_id
       , c.charttime
       -- TODO: eliminate obvious outliers if there is a reasonable weight
       , c.valuenum as weight
-      , ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY charttime) AS rn
-    FROM `physionet-data.mimic_icu.chartevents` c
+      , ROW_NUMBER() OVER (PARTITION BY icustay_id ORDER BY charttime) AS rn
+    FROM `physionet-data.mimiciii_clinical.chartevents` c
     WHERE c.valuenum IS NOT NULL
       AND c.itemid = 226512 -- Admit Wt
-      AND c.stay_id IS NOT NULL
+      AND c.icustay_id IS NOT NULL
       AND c.valuenum > 0
 )
 select
-    co.stay_id
+    co.icustay_id
     , case
         when ht.height is not null and wt.weight is not null
             then (wt.weight / (ht.height/100*ht.height/100))
@@ -61,9 +56,8 @@ select
     , wt.weight
 from aline.cohort co
 left join ht
-  on co.stay_id = ht.stay_id
+  on co.icustay_id = ht.icustay_id
   AND ht.rn = 1
 left join wt
-  on co.stay_id = wt.stay_id
+  on co.icustay_id = wt.icustay_id
   AND wt.rn = 1
-
