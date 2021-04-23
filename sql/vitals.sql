@@ -2,7 +2,7 @@
 with vitals_stg0 as
 (
   select
-    co.stay_id, charttime
+    co.icustay_id, charttime
     , case
         -- MAP, Temperature, HR, CVP, SpO2,
         when itemid in (220052,220181,225312) then 'MAP'
@@ -20,8 +20,8 @@ with vitals_stg0 as
         else valuenum end as valuenum
     , case when ce.charttime > co.vent_starttime then 1 else 0 end as obs_after_vent
   from aline.cohort co
-  inner join `physionet-data.mimic_icu.chartevents` ce
-    on ce.stay_id = co.stay_id
+  inner join `physionet-data.mimiciii_clinical.chartevents` ce
+    on ce.icustay_id = co.icustay_id
     and ce.charttime <= DATETIME_ADD(co.vent_starttime, INTERVAL 4 hour)
     and ce.charttime >= DATETIME_SUB(co.vent_starttime, INTERVAL 1 day)
     and itemid in
@@ -37,15 +37,15 @@ with vitals_stg0 as
 , vitals_stg1 as
 (
   select
-    stay_id, label, valuenum, obs_after_vent
-    , ROW_NUMBER() over (partition by stay_id, label, obs_after_vent order by charttime DESC) as rn
+    icustay_id, label, valuenum, obs_after_vent
+    , ROW_NUMBER() over (partition by icustay_id, label, obs_after_vent order by charttime DESC) as rn
   from vitals_stg0
 )
 -- now aggregate where rn=1 to give the vital sign just before the vent starttime
 , vitals as
 (
   select
-    stay_id
+    icustay_id
     -- this code prioritizes observations made before ventilation
     -- but if they are admitted ventilated then we allow some fuzziness
     , coalesce(min(case when rn = 1 and obs_after_vent = 0 and label = 'MAP' then valuenum else null end),
@@ -57,10 +57,10 @@ with vitals_stg0 as
     , coalesce(min(case when rn = 1 and obs_after_vent = 0 and label = 'SpO2' then valuenum else null end),
     min(case when rn = 1 and obs_after_vent = 1 and label = 'SpO2' then valuenum else null end)) as SpO2
   from vitals_stg1
-  group by stay_id
+  group by icustay_id
 )
 select
-  co.stay_id, v.MAP, ROUND(v.Temperature, 2) AS Temperature, v.HeartRate, v.SpO2
+  co.icustay_id, v.MAP, ROUND(v.Temperature, 2) AS Temperature, v.HeartRate, v.SpO2
 from aline.cohort co
 left join vitals v
-  on co.stay_id = v.stay_id;
+  on co.icustay_id = v.icustay_id;
