@@ -1,6 +1,6 @@
 with labs_preceeding as
 (
-  select co.stay_id
+  select co.icustay_id
     , l.valuenum, l.charttime
     , case
             when itemid = 51006 then 'BUN'
@@ -23,7 +23,7 @@ with labs_preceeding as
         end as label
     , case when l.charttime > co.vent_starttime then 1 else 0 end as obs_after_vent
   from aline.cohort co
-  inner join `physionet-data.mimic_hosp.labevents` l
+  inner join `physionet-data.mimiciii_clinical.labevents` l
     on l.subject_id = co.subject_id
     and l.charttime <= DATETIME_ADD(co.vent_starttime, INTERVAL 4 HOUR)
     and l.charttime >= DATETIME_SUB(co.vent_starttime, INTERVAL 2 day)
@@ -45,14 +45,14 @@ with labs_preceeding as
 , labs_rn as
 (
   select
-    stay_id, valuenum, label, obs_after_vent
-    , ROW_NUMBER() over (partition by stay_id, label, obs_after_vent order by charttime DESC) as rn
+    icustay_id, valuenum, label, obs_after_vent
+    , ROW_NUMBER() over (partition by icustay_id, label, obs_after_vent order by charttime DESC) as rn
   from labs_preceeding
 )
 , labs_grp as
 (
   select
-    stay_id
+    icustay_id
     , coalesce(max(case when label = 'BUN' and obs_after_vent = 0 then valuenum else null end),
               max(case when label = 'BUN' and obs_after_vent = 1 then valuenum else null end)
               ) as BUN
@@ -83,9 +83,9 @@ with labs_preceeding as
 
   from labs_rn
   where rn = 1
-  group by stay_id
+  group by icustay_id
 )
-select co.stay_id
+select co.icustay_id
   , lg.bun as bun_first
   , lg.chloride as chloride_first
   , lg.creatinine as creatinine_first
@@ -98,4 +98,4 @@ select co.stay_id
 
 from aline.cohort co
 left join labs_grp lg
-  on co.stay_id = lg.stay_id
+  on co.icustay_id = lg.icustay_id
