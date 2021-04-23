@@ -28,10 +28,10 @@
 --  First measurement of invasive blood pressure
 with a as
 (
-  select stay_id
+  select icustay_id
   , min(charttime) as starttime_aline
-  from `physionet-data.mimic_icu.chartevents`
-  where stay_id is not null
+  from `physionet-data.mimiciii_clinical.chartevents`
+  where icustay_id is not null
   and valuenum is not null
   and itemid in
   (
@@ -48,36 +48,36 @@ with a as
     220052, --"Arterial Blood Pressure mean"
     225312 --"ART BP mean"
   )
-  group by stay_id
+  group by icustay_id
 )
 -- get intime/outtime from vitals rather than administrative data
 , co_intime as
 (
-  select ie.stay_id, min(charttime) as intime, max(charttime) as outtime
-  from `physionet-data.mimic_icu.icustays` ie
-  left join `physionet-data.mimic_icu.chartevents` ce
-    on ie.stay_id = ce.stay_id
+  select ie.icustay_id, min(charttime) as intime, max(charttime) as outtime
+  from `physionet-data.mimiciii_clinical.icustays` ie
+  left join `physionet-data.mimiciii_clinical.chartevents` ce
+    on ie.icustay_id = ce.icustay_id
     and ce.charttime between DATETIME_SUB(ie.intime, INTERVAL '12' HOUR) and DATETIME_ADD(ie.outtime, INTERVAL '12' HOUR)
     and ce.itemid in (211, 220045)
-  group by ie.stay_id
+  group by ie.icustay_id
 )
 -- first time ventilation was started
 -- last time ventilation was stopped
 , ve as
 (
-  select stay_id
+  select icustay_id
     , SUM(duration_hours)/24.0 as vent_day
     , min(starttime) as starttime_first
     , max(endtime) as endtime_last
   from aline.ventdurations vd
-  group by stay_id
+  group by icustay_id
 )
 , serv as
 (
-    select ie.stay_id, se.curr_service
-    , ROW_NUMBER() over (partition by ie.stay_id order by se.transfertime DESC) as rn
-    from `physionet-data.mimic_icu.icustays` ie
-    inner join `physionet-data.mimic_hosp.services` se
+    select ie.icustay_id, se.curr_service
+    , ROW_NUMBER() over (partition by ie.icustay_id order by se.transfertime DESC) as rn
+    from `physionet-data.mimiciii_clinical.icustays` ie
+    inner join `physionet-data.mimiciii_clinical.services` se
       on ie.hadm_id = se.hadm_id
       and se.transfertime < DATETIME_ADD(ie.intime, INTERVAL '2' HOUR)
 )
@@ -85,7 +85,7 @@ with a as
 , co as
 (
   select
-    ie.subject_id, ie.hadm_id, ie.stay_id
+    ie.subject_id, ie.hadm_id, ie.icustay_id
     , adm.admittime, adm.dischtime
     , co.intime
     -- MIMIC-IV does not contain day of the week information
@@ -95,7 +95,7 @@ with a as
     , co.outtime
 
     , ROW_NUMBER() over (partition by ie.subject_id order by adm.admittime, co.intime) as stay_num
-    , pat.anchor_age AS age
+   --- , pat.anchor_age AS age
     , pat.gender
     , case when pat.gender = 'M' then 1 else 0 end as gender_num
     , vf.vaso_flag
@@ -116,7 +116,7 @@ with a as
       end as initial_aline_flag
 
     -- ventilation
-    , case when ve.stay_id is not null then 1 else 0 end as vent_flag
+    , case when ve.icustay_id is not null then 1 else 0 end as vent_flag
     , case when ve.starttime_first < DATETIME_ADD(co.intime, INTERVAL '12' HOUR) then 1 else 0 end as vent_1st_12hr
     , case when ve.starttime_first < DATETIME_ADD(co.intime, INTERVAL '24' HOUR) then 1 else 0 end as vent_1st_24hr
 
@@ -170,24 +170,24 @@ with a as
     , case when pat.dod is null then 1 else 0 end as censor_flag
 
   from co_intime co
-  inner join `physionet-data.mimic_icu.icustays` ie
-    on co.stay_id = ie.stay_id
-  inner join `physionet-data.mimic_core.admissions` adm
+  inner join `physionet-data.mimiciii_clinical.icustays` ie
+    on co.icustay_id = ie.icustay_id
+  inner join `physionet-data.mimiciii_clinical.admissions` adm
     on ie.hadm_id = adm.hadm_id
-  inner join `physionet-data.mimic_core.patients` pat
+  inner join `physionet-data.mimiciii_clinical.patients` pat
     on ie.subject_id = pat.subject_id
   left join a
-    on ie.stay_id = a.stay_id
+    on ie.icustay_id = a.icustay_id
   left join ve
-    on ie.stay_id = ve.stay_id
+    on ie.icustay_id = ve.icustay_id
   left join serv s
-    on ie.stay_id = s.stay_id
+    on ie.icustay_id = s.icustay_id
     and s.rn = 1
   left join aline.vaso_flag vf
-    on ie.stay_id = vf.stay_id
+    on ie.icustay_id = vf.icustay_id
   left join aline.angus_sepsis sep
     on ie.hadm_id = sep.hadm_id
-  where pat.anchor_age >= 16 -- only adults
+  ---where pat.anchor_age >= 16 -- only adults
 )
 select
   co.*
